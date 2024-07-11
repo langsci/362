@@ -2,8 +2,7 @@
 SOURCE=  main.tex $(wildcard local*.tex) $(wildcard chapters/*.tex) 
 
 # specify your main target here:
-pdf: 
-	xelatex main; biber main; bib2gls main; xelatex main; xelatex main
+pdf: main.bbl main.pdf  #by the time main.pdf, bib assures there is a newer aux file
  
 complete: index main.pdf
 
@@ -27,21 +26,24 @@ main.snd: main.bbl
 	sed -i 's/hyperindexformat{\\\(infn {[0-9]*\)}/\1/' main.sdx # ordering of references to footnotes
 	sed -i 's/hyperindexformat{\\\(infn {[0-9]*\)}/\1/' main.adx
 	sed -i 's/hyperindexformat{\\\(infn {[0-9]*\)}/\1/' main.ldx
+	sed -i 's/.*(Office|Team|Bureau|Organisation|Organization|Embassy|Association|Commission|committee|government).*//' main.adx
 	sed -i 's/\\MakeCapital//' main.adx
-	python3 fixindex.py
-	mv mainmod.adx main.adx
+# 	python3 fixindex.py
 	makeindex -o main.and main.adx
+	grep -o  ", [^0-9, \\]*," main.and
 	makeindex -o main.lnd main.ldx
 	makeindex -o main.snd main.sdx 
+	echo "check for doublets in name index"
+	grep -o  ", [^0-9 \\}]*," main.and|sed "s/, //" | sed "s/,\$//"
 	xelatex main 
  
 
 #create a png of the cover
 cover: FORCE
 	convert main.pdf\[0\] -quality 100 -background white -alpha remove -bordercolor "#999999" -border 2  cover.png
-	cp cover.png googlebooks_frontcover.png
-	convert -geometry 50x50% cover.png covertwitter.png
-	convert main.pdf\[0\] -quality 100 -background white -alpha remove -bordercolor "#999999" -border 2  -resize x495 coveromp.png
+# 	cp cover.png googlebooks_frontcover.png
+# 	convert -geometry 50x50% cover.png covertwitter.png
+# 	convert main.pdf\[0\] -quality 100 -background white -alpha remove -bordercolor "#999999" -border 2  -resize x495 coveromp.png
 	display cover.png
 
 openreview: openreview.pdf
@@ -50,16 +52,11 @@ openreview.pdf:
 	pdftk main.pdf multistamp orstamp.pdf output openreview.pdf 
 
 proofreading: proofreading.pdf
-	
-githubrepo: localmetadata.tex proofreading versions.json
-	grep lsID localmetadata.tex |egrep -o "[0-9]*" > ID	
-	git clone https://github.com/langsci/`cat ID`.git
-	cp proofreading.pdf Makefile versions.json `cat ID`
-	mv `cat ID` ..
+
 	
 versions.json: 
 	grep "^.title{" localmetadata.tex|grep -o "{.*"|egrep -o "[^{}]+">title
-	grep "^.author{" localmetadata.tex|grep -o "{.*"|egrep -o "[^{}]+" |sed 's/\\\(last\)\?and/"},{"name":"/g'>author
+	grep "^.author{" localmetadata.tex|grep -o "{.*"|egrep -o "[^{}]+" |sed 's/ and/"},{"name":"/g'>author
 	echo '{"versions": [{"versiontype": "proofreading",' >versions.json
 	echo -n '		"title": "' >>versions.json
 	echo -n `cat title` >> versions.json
@@ -76,17 +73,25 @@ versions.json:
 	echo  '}'>> versions.json
 	rm author title
 	
-paperhive:  
-	git branch gh-pages
-	git checkout gh-pages
+paperhive:  proofreading.pdf versions.json README.md
+	(git commit -m 'new README' README.md && git push) || echo "README up to date" #this is needed for empty repositories, otherwise they cannot be branched
+	git checkout gh-pages || git branch gh-pages; git checkout gh-pages
 	git add proofreading.pdf versions.json
 	git commit -m 'prepare for proofreading' proofreading.pdf versions.json
 	git push origin gh-pages
-	grep lsID localmetadata.tex |egrep -o "[0-9]*" > ID
 	sleep 3
-	curl -X POST 'https://paperhive.org/api/document-items/remote?type=langsci&id='`cat ID`
-	git checkout master 
+	curl -X POST 'https://paperhive.org/api/document-items/remote?type=langsci&id='`basename $(pwd)`
+	git checkout main
+	git commit -m 'new README' README.md
+	git push
 		
+
+papercurl:
+	$(eval dir=$(shell pwd))
+	$(eval ID=$(shell basename $(dir)))
+	$(eval urlstring="https://paperhive.org/api/document-items/remote?type=langsci&id="$(ID))
+	curl -X POST $(urlstring)
+
 firstedition:
 	git checkout gh-pages
 	git pull origin gh-pages
@@ -95,7 +100,7 @@ firstedition:
 	git add first_edition.pdf 
 	git commit -am 'provide first edition'
 	git push origin gh-pages 
-	git checkout master
+	git checkout main 
 	curl -X POST 'https://paperhive.org/api/document-items/remote?type=langsci&id='`cat ID`
 	
 	
@@ -104,12 +109,10 @@ proofreading.pdf:
 	
 	
 chop:  
-	egrep -o "\{[0-9]+\}\{chapter\*\.[0-9]+\}" main.toc| egrep -o "[0-9]+\}\{chapter"|egrep -o [0-9]+ > cuts.txt
+	egrep -o "\{[0-9]+\}\{chapter\.[0-9]+\}" main.toc| egrep -o "[0-9]+\}\{chapter"|egrep -o [0-9]+ > cuts.txt
 	egrep -o "\{chapter\}\{Index\}\{[0-9]+\}\{section\*\.[0-9]+\}" main.toc| grep -o "\..*"|egrep -o [0-9]+ >> cuts.txt
-	bash chopchapters.sh `grep "mainmatter starts" main.log|grep -o "[0-9]*"`
+	bash chopchapters.sh `grep "mainmatter starts" main.log|grep -o "[0-9]*" $1 $2`
 	
-chapternames:
-	egrep -o "\{chapter\}\{\\\numberline \{[0-9]+}[A-Z][^\}]+\}" main.toc | egrep -o "[[:upper:]][^\}]+" > chapternames	
 	
 #housekeeping	
 clean:
@@ -117,9 +120,9 @@ clean:
 	*.adx *.and *.idx *.ind *.ldx *.lnd *.sdx *.snd *.rdx *.rnd *.wdx *.wnd \
 	*.log *.blg *.ilg \
 	*.aux *.toc *.cut *.out *.tpm *.bbl *-blx.bib *_tmp.bib *bcf \
-	*.glg *.glo *.gls *.wrd *.wdv *.xdv *.mw *.clr *.pgs\
-	main.run.xml\
-	chapters/*aux chapters/*~ chapters/*.bak chapters/*.backup\
+	*.glg *.glo *.gls *.wrd *.wdv *.xdv *.mw *.clr *.pgs \
+	main.run.xml \
+	chapters/*aux chapters/*~ chapters/*.bak chapters/*.backup \
 	langsci/*/*aux langsci/*/*~ langsci/*/*.bak langsci/*/*.backup
 
 realclean: clean
@@ -129,11 +132,14 @@ chapterlist:
 	grep chapter main.toc|sed "s/.*numberline {[0-9]\+}\(.*\).newline.*/\\1/" 
 
 
+chapternames:
+	egrep -o "\{chapter\}\{\\\numberline \{[0-9]+}[A-Z][^\}]+\}" main.toc | egrep -o "[[:upper:]][^\}]+" > chapternames
+
 barechapters:
 	cat chapters/*tex | detex > barechapters.txt
 
 languagecandidates:
-	egrep -oh "[a-z] [A-Z]['a-zA-Z-]+" chapters/*tex| grep -o  [A-Z].* |sort -u >languagelist.txt
+	grep -ohP "(?<=[a-z]|[0-9])(\))?(,)? (\()?[A-Z]['a-zA-Z-]+" chapters/*tex| grep -o  [A-Z].* |sort -u >languagelist.txt
 
 
 FORCE:
@@ -150,7 +156,7 @@ README.md:
 	echo -n "[Book page on langsci-press.org](http://langsci-press.org/catalog/book/" >> README.md
 	echo  `grep lsID localmetadata.tex|sed "s/.*lsID\}{\(.*\)}/\1)/"` >> README.md 
 	echo "## License" >> README.md
-	echo "Copyright: (c) 2017, the authors." >> README.md
+	echo "Copyright: (c) "`date +"%Y"`", the authors." >> README.md
 	echo "All data, code and documentation in this repository is published under the [Creative Commons Attribution 4.0 Licence](http://creativecommons.org/licenses/by/4.0/) (CC BY 4.0)." >> README.md
 
 	
